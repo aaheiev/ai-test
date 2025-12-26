@@ -1,30 +1,54 @@
 # AI Coding Agent Instructions
 
 ## Project Overview
-This is a Kubernetes Pod data parsing utility written in Ruby. The project transforms a Kubernetes cluster export (`pods.json`) into processed output. The `pods.json` file contains a complete Kubernetes v1 API response with Pod objects from multiple namespaces (e.g., ArgoCD).
+This project provides utilities for analyzing Kubernetes cluster state exported from a running cluster. The primary data source is `pods.json`, a complete Kubernetes v1 API response containing Pod objects from multiple namespaces (e.g., ArgoCD).
+
+**Current State**: The project is in early development. Ruby-based utilities are being built to transform the raw Kubernetes export into processed analysis.
 
 ## Architecture & Key Components
-- **parse.rb**: Main Ruby script (currently minimal - intended as entry point for pod data processing)
-- **pods.json**: Real Kubernetes cluster state (~64K lines); contains Pod metadata, specs, status, and controller references (StatefulSets, Deployments)
+- **pods.json**: Real Kubernetes cluster state (~64K lines); contains Pod metadata, specs, status, and controller references (StatefulSets, Deployments). Generated via `kubectl get pods -A -o json > pods.json`.
+- **Future scripts**: Will be written in Ruby to parse and analyze pod data.
 
-## Development Workflow
-- **Language**: Ruby (#!/usr/bin/env ruby shebang for executability)
-- **Dependencies**: JSON library (built-in)
-- **Data Format**: Kubernetes API v1 JSON structure with `apiVersion`, `kind`, `metadata`, `spec`, `status` fields
+## Key Data Patterns in pods.json
+The JSON follows Kubernetes API v1 structure:
+- Root object has `apiVersion: "v1"` and `items[]` array
+- Each Pod object contains:
+  - `metadata`: namespace, name, labels (e.g., `app.kubernetes.io/name`), annotations, timestamps, ownerReferences
+  - `spec`: containers[], volumes[], service account, affinity rules
+  - `status`: phase (Running/Pending/Failed), conditions, container statuses
 
-## Working with pods.json
-The JSON structure mirrors Kubernetes API:
-- `items[]`: Array of Pod objects
-- Each Pod contains: `metadata` (labels, annotations, timestamps), `spec` (containers, volumes), `ownerReferences` (StatefulSet/Deployment linkage)
-- Typical fields for filtering: `metadata.namespace`, `metadata.labels`, `spec.containers[]`, `ownerReferences[].kind`
+### Important Fields for Filtering
+- `pod['metadata']['namespace']` — e.g., "argocd", "kube-system"
+- `pod['metadata']['labels']['app.kubernetes.io/name']` — application identifier (keys with dots are literal strings)
+- `pod['metadata']['ownerReferences']` — array indicating parent controller type and name
+- `pod['spec']['containers']` — container definitions with args, env, resources
+- `pod['status']['phase']` — operational state of the pod
 
-## Code Patterns
-- Use `JSON.parse(File.read('pods.json'))` to load data
-- Iterate `data['items']` to process individual pods
-- Access nested metadata: `pod['metadata']['labels']['app.kubernetes.io/name']` (note: keys with dots are literal)
-- Filter by `metadata.namespace` (example: 'argocd') or `ownerReferences[].kind` (StatefulSet, Deployment)
+## Ruby Code Patterns
+```ruby
+require 'json'
 
-## Key Considerations
-- Pod JSON can be very large; consider streaming or filtering strategies
-- Label selectors and field selectors are common query patterns in Kubernetes
-- Pod lifecycle: focus on `status.phase` and `status.conditions` for operational state
+data = JSON.parse(File.read('pods.json'))
+
+# Iterate all pods
+data['items'].each do |pod|
+  namespace = pod['metadata']['namespace']
+  name = pod['metadata']['name']
+  labels = pod['metadata']['labels']
+  phase = pod['status']['phase']
+  
+  # Access owner reference (if exists)
+  owner = pod['metadata']['ownerReferences']&.first
+  owner_kind = owner&.fetch('kind')  # StatefulSet, Deployment, etc.
+end
+
+# Filter patterns
+argocd_pods = data['items'].select { |p| p['metadata']['namespace'] == 'argocd' }
+statefulset_pods = data['items'].select { |p| p['metadata']['ownerReferences']&.any? { |o| o['kind'] == 'StatefulSet' } }
+```
+
+## Development Considerations
+- The `pods.json` file is large; scripts should use filtering and streaming where performance matters
+- Labels follow Kubernetes conventions (`app.kubernetes.io/*`, `kubernetes.io/*`); use these for querying
+- Status fields include conditions array with timestamps and reasons — useful for pod lifecycle analysis
+- Use `.fetch()` with default values when accessing optional nested fields to avoid nil errors
